@@ -35,7 +35,7 @@ input_line(l, li, ch) as (
     select l, li, ch from input_line_raw where ch != 0 -- cleaning the line breaks
 ),
 -- all first digits
-first_digits as (
+first_digits(l, li, ch) as (
     select
         l,
         li,
