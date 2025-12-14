@@ -1,4 +1,5 @@
--- Run it with $ sqlite3 :memory: < part1.sql
+-- Run it with
+-- $ sqlite3 -box :memory: < part2.sql
 
 with recursive
 raw_input as (select readfile('input.txt')),
@@ -33,154 +34,80 @@ input_lines_raw(l, gi, li, ch) as (
     where l < (select num_lines from day3)
 ),
 input_lines(l, li, ch) as (
-    select l, li, ch from input_lines_raw where ch != 0 -- cleaning the line breaks
-),
-first_digits(l, li, ch) as (
     select
         l,
         li,
-        max(ch) as ch
-    from input_lines
-    where li <= (select line_length from day3) - (select joltage_length from day3)
-    group by l
--- ) select * from first_digits;/*,
+        ch
+    from input_lines_raw where ch != 0 -- cleaning the line breaks
 ),
-unordered_digits as (
+-- The problem mandates 12 characters answers
+-- that is, this iterator need to run 12 times for each line of the input
+-- however because of the fact that recursive CTEs need a dummy base row, we will iterate 13 times for each line
+-- the first row will always be a dummy one, with pos = -1
+-- the only purpose of that row is to reset the variables to initial states and prepare for the next input line
+-- we detect a new line when
+--   (select joltage_length from day3) - mod(i, (select joltage_length from day3) + 1) = (select joltage_length from day3),
+-- an expression that you'll se repeated multiple times in the following query,
+-- i would love to bind that value to a name but it seems not possible in sqlite
+iterator(i, pos, remaining, l, ch) as (
     select
-        row_number() over (partition by input_lines.l order by input_lines.l, input_lines.ch desc, input_lines.li) as relative_rowid,
-        row_number() over (order by input_lines.l, input_lines.ch desc, input_lines.li) as rowid,
-        input_lines.l as input_line_l,
-        input_lines.li as input_line_li,
-        input_lines.ch as input_line_ch
-    from input_lines
-    order by input_lines.l, input_lines.ch desc, input_lines.li
-)
--- ) select * from unordered_digits; /*
-,
-iterator(helper, i, l, li, ch, is_selected, n) as (
--- iterator(i, l, li, ch, is_selected, n) as (
-    select
-        false,
-        0, -- first rowid
+        -- initial dummy values
+        1,
+        -1, -- we keep track of the last selected character local index (li)
+        (select joltage_length from day3)+1 as remaining,
         0,
-        0,
-        '-',
-        -- false, -- not necesarily the maximum
-        false,
-        0 -- start from 0, this is the first iteration
-    from unordered_digits where rowid = 1 and input_line_l = 0
+        ''
     union all
     select
-        (
-            select string_agg(d.input_line_ch, ', ')
-            from unordered_digits d
+        -- the loop iteration
+        i + 1,
+        case
+            -- new lines get its position resetted
+            when (select joltage_length from day3) - mod(i, (select joltage_length from day3) + 1) = (select joltage_length from day3)
+                then -1
+            else (
+            -- The main algorithm. It searchs in the input characters for the MAX(value) that is
+            --   (* ) after out current pos
+            --   (**) but before we ran out of space to not be able to select enough characters to reach 12 (joltage_length)
+            -- This way we ensure we get the maxmimum next value from the tightest range possible
+            -- The same expression is repeated later, this is for getting its index, and the later for getting its value
+            select
+                li
+            from input_lines
             where
-                d.input_line_l = unordered_digits.input_line_l
-                and d.input_line_ch > unordered_digits.input_line_ch
-                and d.input_line_li > unordered_digits.input_line_li
-        ),
-        iterator.i + 1 - (unordered_digits.input_line_l - iterator.l),
-        unordered_digits.input_line_l,
-        unordered_digits.input_line_li,
-        unordered_digits.input_line_ch,
-        -- case
-        --     when unordered_digits.input_line_l != iterator.l then -1
-        --     when (
-        --         case
-        --             when n = 0 and (unordered_digits.input_line_li >= ((select line_length from day3) - (select joltage_length from day3))) then true
-        --             when ((select line_length from day3) - unordered_digits.relative_rowid + 1 = (select joltage_length from day3) - n) then true
-        --             when n >= (select joltage_length from day3) then false --- maybe unneeded?
-        --             -- when ((select line_length from day3) - unordered_digits.input_line_li >= (select joltage_length from day3) - n) then true
-        --             when unordered_digits.input_line_li >= first_digits.li then true
-        --             else false
-        --         end
-        --     ) and currmax == -1 and (unordered_digits.input_line_li < ((select line_length from day3) - (select joltage_length from day3))) then unordered_digits.input_line_li
-        --     else currmax
-        -- end,
-        -- case
-        --     when unordered_digits.input_line_l != iterator.l then -1
-        --     -- if we don't find a first digit yet, then we accept anything that is within the allowed range
-        --     when currmax = -1 and (unordered_digits.input_line_li >= ((select line_length from day3) - (select joltage_length from day3))) then currmax
-        --     -- when we have the *same* amount of characters to try than we need to fill the joltage_length
-        --     when ((select line_length from day3) - unordered_digits.relative_rowid + 1 = (select joltage_length from day3) - n) then unordered_digits.input_line_li
-        --     -- when we go to a new line, we reset
-        --     -- if we have enough characters to reach the joltage_length
-        --     when n >= (select joltage_length from day3) then currmax
-        --     -- if the current position doesn't fit for the amount of characters that are left, skip it
-        --     --  when ((select line_length from day3) - unordered_digits.input_line_li >= (select joltage_length from day3) - n) then unordered_digits.input_line_li
-        --     --
-        --     -- when unordered_digits.input_line_li >= iterator.currmax then unordered_digits.input_line_li
-        --     else currmax
-        -- end,
+                input_lines.l = iterator.l and -- (* )
+                input_lines.li > iterator.pos and -- (**)
+                input_lines.li <= ((select line_length from day3) - iterator.remaining+1)
+            order by ch desc
+            limit 1
+        ) end,
+        -- remaining
+        (select joltage_length from day3) - mod(i, (select joltage_length from day3) + 1) + 1,
+        -- current line
         case
-            when n = 0 and (unordered_digits.input_line_li >= ((select line_length from day3) - (select joltage_length from day3))) then true
-            when ((select line_length from day3) - unordered_digits.relative_rowid + 1 = (select joltage_length from day3) - n) then true
-            when n >= (select joltage_length from day3) then false --- maybe unneeded?
-            -- when ((select line_length from day3) - unordered_digits.input_line_li >= (select joltage_length from day3) - n) then true
-            when exists (
-                select string_agg(d.input_line_ch, ', ')
-                from unordered_digits d
-                where d.input_line_l = unordered_digits.input_line_l and d.input_line_ch > unordered_digits.input_line_ch and d.input_line_li > unordered_digits.input_line_li
-            ) then false
-            when unordered_digits.input_line_li >= first_digits.li then true
-            else false
+            when (select joltage_length from day3) - mod(i, (select joltage_length from day3) + 1) = (select joltage_length from day3)
+                then iterator.l + 1
+            else iterator.l
         end,
-        case
-            when unordered_digits.input_line_l != iterator.l then 0
-            when n = 0 and (unordered_digits.input_line_li >= ((select line_length from day3) - (select joltage_length from day3))) then n + 1
-            when ((select line_length from day3) - unordered_digits.relative_rowid + 1 = (select joltage_length from day3) - n) then n + 1
-            when n >= (select joltage_length from day3) then n
-            -- when ((select line_length from day3) - unordered_digits.input_line_li >= (select joltage_length from day3) - n) then n + 1
-            when exists (
-                select string_agg(d.input_line_ch, ', ')
-                from unordered_digits d
-                where d.input_line_l = unordered_digits.input_line_l and d.input_line_ch > unordered_digits.input_line_ch and d.input_line_li > unordered_digits.input_line_li
-            ) then n
-            when unordered_digits.input_line_li >= first_digits.li then n + 1
-            else n
-        end
-    from iterator
-    join unordered_digits on unordered_digits.rowid = iterator.i + 1
-    join first_digits on first_digits.l = iterator.l
-) select * from iterator;/*
-
-), ordered_digits as (
-    select * from iterator where is_selected = true order by l, li
-), answers as (
+        (
+            select
+                max(ch)
+            from input_lines
+            where
+                input_lines.l = iterator.l and
+                input_lines.li > iterator.pos and
+                input_lines.li <= ((select line_length from day3) - iterator.remaining+1)
+        )
+        from iterator
+        limit (
+            select (count(69) / (select line_length from day3)) * ((select joltage_length from day3) + 1) from input_lines
+        )
+),
+answers as (
     select
-        ordered_digits.l as l,
-        cast(string_agg(ordered_digits.ch, '') as integer) as num
-        from ordered_digits
-        group by ordered_digits.l
-) select * from answers;
--- ) select sum(num) from answers;
-
-
--- ,
--- -- unordered by ???? i don't even remember xdxdxdx
--- unordered_digits as (
---     select * from (
---         select
---             row_number() over (partition by input_lines.l order by input_lines.l, input_lines.ch desc, input_lines.li) as rowid,
---             input_lines.l as input_line_l,
---             input_lines.li as input_line_li,
---             input_lines.ch as input_line_ch,
---             first_digits.l as first_digits_l,
---             first_digits.li as first_digits_li,
---             first_digits.ch as first_digits_ch
---         from input_lines
---             join first_digits on input_lines.l = first_digits.l
---         where input_lines.li > first_digits.li
---         order by input_lines.l, input_lines.ch desc, input_lines.li
---     ) where rowid > (select line_length from day3) - first_digits_li - (select joltage_length from day3)
--- ) select * from unordered_digits;,
-
--- cutted_digits as (
---     select * from unordered_digits order by input_line_l, input_line_li
--- ),
--- answers as (
---     select
---         cast(first_digits.ch || string_agg(cutted_digits.input_line_ch, '') as integer) as val
---     from cutted_digits join first_digits on cutted_digits.input_line_l = first_digits.l
---     group by cutted_digits.input_line_l
--- ) select * from answers;
+        l,
+        string_agg(iterator.ch, '') val
+    from iterator
+    where pos >= 0
+    group by iterator.l
+) select sum(val) from answers;
